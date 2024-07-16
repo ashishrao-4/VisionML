@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VisionML</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .upload-section {
+            margin-bottom: 20px;
+        }
+        .upload-section input {
+            width: calc(100% - 22px);
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .file-input {
+            margin-bottom: 10px;
+        }
+        #imagePreview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        #imagePreview img {
+            width: 100px;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 5px;
+        }
+        #trainButton {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #trainButton:hover {
+            background-color: #45a049;
+        }
+        #status {
+            margin-top: 20px;
+            text-align: center;
+            font-weight: bold;
+        }
+        #downloadButton {
+            display: none;
+            width: 100%;
+            padding: 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        #downloadButton:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Image Classifier Trainer</h1>
+
+        <div class="upload-section">
+            <input type="text" id="classAName" class="class-input" placeholder="Enter Class A Name">
+            <input type="file" id="classAInput" class="file-input" multiple accept="image/*">
+        </div>
+
+        <div class="upload-section">
+            <input type="text" id="classBName" class="class-input" placeholder="Enter Class B Name">
+            <input type="file" id="classBInput" class="file-input" multiple accept="image/*">
+        </div>
+
+        <div id="imagePreview"></div>
+
+        <button id="trainButton">Train Model</button>
+
+        <div id="status"></div>
+
+        <a id="downloadButton" href="#" download>Download Trained Model (.h5)</a>
+    </div>
+
+    <script>
+        const classAInput = document.getElementById('classAInput');
+        const classBInput = document.getElementById('classBInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const trainButton = document.getElementById('trainButton');
+        const status = document.getElementById('status');
+        const downloadButton = document.getElementById('downloadButton');
+
+        function handleFileSelect(event, className) {
+            const files = event.target.files;
+            const classFolder = document.getElementById(`class${className}Name`).value.trim();
+
+            if (!classFolder) {
+                alert('Please enter a class name for ' + className);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('className', classFolder);
+
+            for (let i = 0; i < files.length; i++) {
+                formData.append('files', files[i]);
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.title = `${classFolder}: ${files[i].name}`;
+                    imagePreview.appendChild(img);
+                };
+                
+                reader.readAsDataURL(files[i]);
+            }
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log(data.message);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        }
+
+        classAInput.addEventListener('change', (e) => handleFileSelect(e, 'A'));
+        classBInput.addEventListener('change', (e) => handleFileSelect(e, 'B'));
+
+        trainButton.addEventListener('click', () => {
+            status.textContent = 'Training started...';
+
+            fetch('/train', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                status.textContent = data.message;
+                if (data.message.includes('ready')) {
+                    downloadButton.style.display = 'block'; // Show download button after training
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+        });
+
+        downloadButton.addEventListener('click', () => {
+            window.location.href = '/model'; // Trigger download of trained_model.h5
+        });
+    </script>
+</body>
+</html>
