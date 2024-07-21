@@ -1,124 +1,102 @@
+import io
 import torch
+import torchvision.transforms as transforms
 import torch.nn as nn
 import torch.optim as optim
-from torchvision import transforms, datasets
-from torch.utils.data import DataLoader, Dataset
-from PIL import Image
-import io
 import firebase_admin
 from firebase_admin import credentials, storage
+from PIL import Image
+import requests
 import os
 
 # Initialize Firebase Admin SDK
-cred = credentials.Certificate("visionml-flask-firebase-adminsdk-njze6-b90ca009af.json")
+cred = credentials.Certificate("visionml-flask-firebase-adminsdk-njze6-bd9b7dd69d.json")
 firebase_admin.initialize_app(cred, {
     'storageBucket': 'visionml-flask.appspot.com'
 })
 
-# Custom dataset to load images from Firebase
-class FirebaseImageDataset(Dataset):
-    def __init__(self, transform=None):
-        self.transform = transform
-        self.images = []
-        self.labels = []
-        self.class_names = self._get_class_names_from_firebase()
-        self._load_images_from_firebase()
-
-    def _get_class_names_from_firebase(self):
-        bucket = storage.bucket()
-        blobs = bucket.list_blobs(prefix='train_images/')
-        class_names = set()
-        for blob in blobs:
-            parts = blob.name.split('/')
-            if len(parts) > 1 and parts[1]:
-                class_names.add(parts[1])
-        return sorted(class_names)
-
-    def _load_images_from_firebase(self):
-        bucket = storage.bucket()
-        for label, class_name in enumerate(self.class_names):
-            blobs = bucket.list_blobs(prefix=f'train_images/{class_name}/')
-            for blob in blobs:
-                image_data = blob.download_as_bytes()
-                image = Image.open(io.BytesIO(image_data)).convert('RGB')
-                self.images.append(image)
-                self.labels.append(label)
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, idx):
-        image = self.images[idx]
-        label = self.labels[idx]
-        if self.transform:
-            image = self.transform(image)
-        return image, label
-
-# Set device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Define transformations
-train_transform = transforms.Compose([
-    transforms.Resize((224, 224)),  # Resize to a fixed size
-    transforms.RandomHorizontalFlip(),  # Data augmentation
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
-
-# Load datasets
-train_dataset = FirebaseImageDataset(transform=train_transform)
-
-# Create data loaders
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-
-# Define the CNN model
-class CatDogCNN(nn.Module):
+# Define your model
+class SimpleModel(nn.Module):
     def __init__(self):
-        super(CatDogCNN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, 3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(128 * 28 * 28, 512)
-        self.fc2 = nn.Linear(512, 2)
-        self.dropout = nn.Dropout(0.5)
+        super(SimpleModel, self).__init__()
+        self.fc1 = nn.Linear(784, 10)  # Example for MNIST
 
     def forward(self, x):
-        x = self.pool(torch.relu(self.conv1(x)))
-        x = self.pool(torch.relu(self.conv2(x)))
-        x = self.pool(torch.relu(self.conv3(x)))
-        x = x.view(-1, 128 * 28 * 28)
-        x = self.dropout(torch.relu(self.fc1(x)))
-        x = self.fc2(x)
+        x = x.view(-1, 784)
+        x = self.fc1(x)
         return x
 
-# Initialize the model, loss function, and optimizer
-model = CatDogCNN().to(device)
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+def download_images_from_firebase():
+    bucket = storage.bucket()
+    blobs = bucket.list_blobs(prefix="train_images/")
+    
+    class_images = {}
+    for blob in blobs:
+        if not blob.name.endswith('/'):
+            class_name = blob.name.split('/')[1]
+            if class_name not in class_images:
+                class_images[class_name] = []
+            buffer = io.BytesIO()
+            blob.download_to_file(buffer)
+            buffer.seek(0)
+            image = Image.open(buffer).convert('L')  # Convert to grayscale for MNIST
+            class_images[class_name].append(image)
+    
+    return class_images
 
-# Training loop
-num_epochs = 10
-for epoch in range(num_epochs):
-    model.train()
-    running_loss = 0.0
-    for i, (inputs, labels) in enumerate(train_loader):
-        inputs, labels = inputs.to(device), labels.to(device)
+def train():
+    # Initialize model, loss function, and optimizer
+    model = SimpleModel()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+    # Define data transformations
+    transform = transforms.Compose([transforms.Resize((28, 28)), transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
 
-        running_loss += loss.item()
+    class_images = download_images_from_firebase()
 
-        if i % 10 == 0:  # Print every 10 batches
-            print(f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}')
+    data = []
+    class_name_to_label = {class_name: idx for idx, class_name in enumerate(class_images.keys())}
+    
+    for class_name, images in class_images.items():
+        label = class_name_to_label[class_name]
+        for image in images:
+            data.append((transform(image), label))
 
-    print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader):.4f}')
+    if not data:
+        raise ValueError("No training data found in Firebase storage.")
 
-# Save the trained model
-os.makedirs('models', exist_ok=True)
-model_path = 'models/trained_model.h5'
-torch.save(model.state_dict(), model_path)
+    trainloader = torch.utils.data.DataLoader(data, batch_size=4, shuffle=True)
+
+    num_epochs = 2  # Define the number of epochs
+    for epoch in range(num_epochs):
+        running_loss = 0.0
+        for i, (inputs, labels) in enumerate(trainloader):
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+            if i % 100 == 99:
+                print(f'Epoch [{epoch + 1}/{num_epochs}], Step [{i + 1}/{len(trainloader)}], Loss: {running_loss / 100:.4f}')
+                running_loss = 0.0
+
+        # Print loss after each epoch
+        print(f'Epoch [{epoch + 1}/{num_epochs}] completed with loss: {running_loss / len(trainloader):.4f}')
+
+    # Save the model to an H5 file
+    model_save_path = 'trained_model.h5'
+    torch.save(model.state_dict(), model_save_path)
+
+    # Upload the model to Firebase Storage
+    bucket = storage.bucket()
+    blob = bucket.blob('models/trained_model.h5')
+    blob.upload_from_filename(model_save_path, content_type='application/octet-stream')
+    print('Training completed and model uploaded to Firebase.')
+
+    # Remove local model file
+    os.remove(model_save_path)
+
+if __name__ == "__main__":
+    train()
